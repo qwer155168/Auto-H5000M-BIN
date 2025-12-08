@@ -349,11 +349,16 @@ jobs:
           
           make defconfig
 
-      - name: Verify modem-webui config & refresh index
+      - name: Verify modem-webui config
         run: |
           cd $SOURCE_DIR
+          echo "检查 modem-webui 配置..."
           grep CONFIG_PACKAGE_modem-webui .config || (echo "modem-webui 未配置，终止编译" && exit 1)
-          make package/index
+          echo "✅ modem-webui 已配置"
+          
+          # 显示关键包配置
+          echo "📦 关键包配置状态:"
+          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|modem-webui|adguardhome|homeproxy)=" .config || true
 
       - name: Download & Compile
         run: |
