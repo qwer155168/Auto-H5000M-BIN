@@ -1,0 +1,265 @@
+name: Build ImmortalWrt H5000M
+
+on:
+  schedule:
+    - cron: '0 16 * * 0'  # 每周日 UTC 16:00 (北京时间周一 0:00)
+  workflow_dispatch:
+    inputs:
+      clean-cache:
+        description: '清理构建缓存（仅在遇到问题时启用）'
+        required: false
+        default: 'false'
+      skip-feeds-update:
+        description: '跳过feeds更新（使用缓存）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  REPO_BRANCH: mt798x-mt799x-6.6-mtwifi
+  CONFIG_FILE: h5000m.config  # 修改为使用您的自定义配置
+  TZ: Asia/Shanghai
+  SOURCE_DIR: immortalwrt
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: 初始化环境
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          echo "========== 磁盘空间清理 =========="
+          df -h
+          
+          # 清理Docker镜像
+          docker rmi $(docker images -q) 2>/dev/null || true
+          
+          # 删除不需要的大型组件
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /etc/mysql /etc/php
+          
+          # 卸载不需要的软件
+          sudo apt-get -y purge azure-cli* ghc* zulu* hhvm* llvm* firefox* || true
+          
+          # 安装编译依赖
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y build-essential ccache clang cmake curl \
+            gcc-multilib g++-multilib git libncurses5-dev libssl-dev \
+            python3 python3-pip python3-setuptools rsync unzip wget
+          
+          sudo apt-get autoremove -qq --purge
+          sudo apt-get clean -qq
+          
+          # 设置时区
+          sudo timedatectl set-timezone "$TZ"
+          
+          echo "系统信息: $(nproc) 核心, $(free -g | awk '/Mem:/{print $2}')GB 内存"
+          df -h /home/runner
+
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          path: workspace
+
+      # ==================== 缓存配置 ====================
+      - name: 设置CCache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ccache-${{ hashFiles('feeds.conf.default', 'h5000m.config') }}
+          max-size: 8G
+          save: ${{ github.event.inputs.clean-cache != 'true' }}
+
+      - name: 恢复构建缓存
+        id: restore-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/feeds
+            ${{ env.SOURCE_DIR }}/staging_dir
+            ${{ env.SOURCE_DIR }}/build_dir
+          key: ${{ runner.os }}-immortalwrt-${{ hashFiles('feeds.conf.default', 'h5000m.config') }}
+          restore-keys: |
+            ${{ runner.os }}-immortalwrt-
+
+      - name: 克隆源码
+        run: |
+          if [[ -d "$SOURCE_DIR/.git" && "${{ steps.restore-cache.outputs.cache-hit }}" == 'true' ]]; then
+            echo "✅ 使用缓存的源码目录"
+            cd $SOURCE_DIR
+            git fetch origin $REPO_BRANCH
+            git reset --hard origin/$REPO_BRANCH
+          else
+            echo "🔄 重新克隆源码"
+            rm -rf $SOURCE_DIR
+            git clone -b $REPO_BRANCH --depth=1 $REPO_URL $SOURCE_DIR
+            cd $SOURCE_DIR
+          fi
+          
+          # 使用自定义的feeds.conf.default
+          cp $GITHUB_WORKSPACE/workspace/feeds.conf.default .
+          
+          # 优化CCache配置
+          ccache --set-config=compression=true
+          ccache --set-config=max_size=8G
+          ccache --set-config=sloppiness=file_macro,time_macros
+
+      - name: 更新和安装Feeds
+        run: |
+          cd $SOURCE_DIR
+          
+          # 根据输入参数决定是否跳过feeds更新
+          if [[ "${{ github.event.inputs.skip-feeds-update }}" == 'true' && -d feeds ]]; then
+            echo "⏭️ 跳过feeds更新（使用缓存）"
+          else
+            echo "🔄 更新feeds..."
+            ./scripts/feeds update -a
+            
+            # 安装feeds（静默模式减少输出）
+            echo "📦 安装feeds..."
+            ./scripts/feeds install -a > /dev/null 2>&1 || ./scripts/feeds install -a
+          fi
+          
+          # 克隆额外的luci-app-adguardhome
+          if [ ! -d "package/luci-app-adguardhome" ]; then
+            git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome
+          fi
+
+      - name: 修复依赖问题
+        run: |
+          cd $SOURCE_DIR
+          echo "🔧 修复已知依赖问题..."
+          
+          # 移除有问题的包
+          rm -rf package/feeds/packages/exim 2>/dev/null || true
+          rm -rf package/feeds/packages/onionshare-cli 2>/dev/null || true
+          rm -rf package/feeds/qmodem/ndisc6 2>/dev/null || true
+          
+          # 修复QModem依赖
+          QMODEM_MK="package/feeds/qmodem/qmodem/Makefile"
+          if [ -f "$QMODEM_MK" ]; then
+            sed -i 's/+kmod-mhi-wwan/# +kmod-mhi-wwan/g' "$QMODEM_MK" || true
+          fi
+
+      - name: 应用配置
+        run: |
+          cd $SOURCE_DIR
+          
+          # 使用自定义配置
+          cp $GITHUB_WORKSPACE/workspace/h5000m.config .config
+          
+          # 确保CCache启用
+          if ! grep -q "CONFIG_CCACHE=y" .config; then
+            echo "CONFIG_CCACHE=y" >> .config
+          fi
+          
+          # 生成完整配置
+          make defconfig
+          
+          echo "📋 配置摘要:"
+          grep -E "CONFIG_TARGET|CONFIG_PACKAGE_(qmodem|adguardhome|mihomo)=" .config || true
+
+      - name: 下载软件包
+        run: |
+          cd $SOURCE_DIR
+          export PATH="/usr/lib/ccache:$PATH"
+          
+          echo "📊 CCache状态:"
+          ccache -s
+          
+          echo "⬇️ 下载软件包..."
+          # 使用多线程下载，失败时重试
+          for i in 1 2 3; do
+            make download -j$(nproc) && break
+            echo "下载尝试 $i 失败，重试..."
+            find dl -size -1024c -delete 2>/dev/null
+            sleep 5
+          done
+
+      - name: 编译固件
+        run: |
+          cd $SOURCE_DIR
+          THREADS=$(($(nproc) + 1))
+          export PATH="/usr/lib/ccache:$PATH"
+          
+          echo "🔨 开始编译 (${THREADS}线程)..."
+          echo "=========================================="
+          
+          # 使用CCache加速编译
+          make -j$THREADS IGNORE_ERRORS=m 2>&1 | tee build.log || \
+            (echo "⚠️ 并行编译失败，尝试单线程编译..." && make -j1 V=s 2>&1 | tee build_fallback.log)
+          
+          echo "=========================================="
+          echo "📊 编译完成，CCache统计:"
+          ccache -s
+
+      - name: 保存缓存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/feeds
+            ${{ env.SOURCE_DIR }}/staging_dir
+            ${{ env.SOURCE_DIR }}/build_dir
+          key: ${{ steps.restore-cache.outputs.cache-primary-key }}
+
+      - name: 准备固件文件
+        if: success()
+        run: |
+          mkdir -p artifacts
+          
+          # 复制所有固件文件
+          find $SOURCE_DIR/bin/targets -type f \( \
+            -name "*.bin" -o \
+            -name "*.img*" -o \
+            -name "*.tar" -o \
+            -name "*.gz" -o \
+            -name "*.zip" \
+          \) -exec cp {} artifacts/ \;
+          
+          echo "📦 生成的文件:"
+          ls -lh artifacts/
+
+      - name: 上传到工作流制品
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-mt7987-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 14
+
+      - name: 创建GitHub发布版
+        if: success()
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: ImmortalWrt MT7987 构建 #${{ github.run_number }}
+          body: |
+            ## 🚀 自动构建完成
+            
+            **构建信息**
+            - 运行ID: #${{ github.run_number }}
+            - 触发方式: ${{ github.event_name }}
+            - 缓存命中: ${{ steps.restore-cache.outputs.cache-hit }}
+            
+            **配置摘要**
+            - 目标设备: MT7987/MT7992
+            - 包含功能: QModem, AdGuardHome, Mihomo
+            
+            **使用说明**
+            1. 下载对应固件文件
+            2. 通过路由器管理页面刷入
+            3. 首次刷机建议不保留配置
+            
+            > 此为由GitHub Actions自动构建的测试固件
+          files: artifacts/*
+          draft: false
+          prerelease: true
