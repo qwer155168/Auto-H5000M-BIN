@@ -121,7 +121,10 @@ jobs:
           
           # 添加 QModem feed & 更新
           grep -q "qmodem" feeds.conf.default || echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
-          ./scripts/feeds update -a && ./scripts/feeds install -a -f
+          # 添加 Mihomo feed
+          grep -q "mihomo" feeds.conf.default || echo 'src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main' >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -f
           
           # ======== 克隆额外的软件包 ========
           echo "克隆额外软件包..."
@@ -253,6 +256,7 @@ jobs:
           CONFIG_PACKAGE_adguardhome=y
           CONFIG_PACKAGE_luci-app-ramfree=y
           CONFIG_PACKAGE_luci-app-homeproxy=y
+          CONFIG_PACKAGE_luci-app-mihomo=y
           CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_kmod-tun=y
           
@@ -295,7 +299,7 @@ jobs:
         run: |
           cd $SOURCE_DIR
           echo "📦 关键包配置状态:"
-          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|adguardhome|homeproxy)=" .config || true
+          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|adguardhome|homeproxy|mihomo)=" .config || true
 
       - name: Download & Compile
         run: |

@@ -28,6 +28,7 @@
 
 - **QModem** - 5G/LTE 模组管理（支持 Quectel、Fibocom 等）
 - **HomeProxy** - 代理工具
+- **Mihomo** - 代理客户端
 - **MWAN3** - 多 WAN 负载均衡
 - **UPnP** - 自动端口映射
 
@@ -58,6 +59,7 @@
 
 - [上游源码](https://github.com/padavanonly/immortalwrt-mt798x-24.10)
 - [QModem 项目](https://github.com/FUjr/QModem)
+- [Mihomo 项目](https://github.com/morytyann/OpenWrt-mihomo)
 - [ImmortalWrt 官网](https://immortalwrt.org/)
 
 ---
