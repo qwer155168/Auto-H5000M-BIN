@@ -247,7 +247,8 @@ jobs:
           CONFIG_PACKAGE_luci-app-qmodem-mwan=y
           CONFIG_PACKAGE_mwan3=y
           CONFIG_PACKAGE_luci-app-mwan3=y
-          
+          # HQOS 支持
+          CONFIG_PACKAGE_mtkhqos_util=y
           # ======== 常用软件 ========
           CONFIG_PACKAGE_luci-app-upnp=y
           CONFIG_PACKAGE_luci-app-vlmcsd=y
