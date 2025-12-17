@@ -8,4 +8,6 @@ src-git homeproxy https://github.com/immortalwrt/homeproxy.git;main
 # openclash: Provides OpenClash packages
 src-git openclash https://github.com/vernesong/OpenClash.git;master
 # mosdns: Provides MosDNS packages
-src-git mosdns https://github.com/sbwml/luci-app-mosdns.git;main
+src-git mosdns https://github.com/sbwml/luci-app-mosdns.git;master
+# dockerman: Provides Docker management packages
+src-git dockerman https://github.com/lisaac/luci-app-dockerman.git;master

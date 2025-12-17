@@ -45,6 +45,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      enable_dockerman:
+        description: '启用 DockerMan'
+        required: false
+        default: 'false'
+        type: boolean
 
 # 权限：允许写入内容（用于创建 release）
 permissions:
@@ -108,8 +113,8 @@ jobs:
             echo "使用默认 feeds.conf.default"
           fi
 
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a -f
+          ./scripts/feeds update -a || echo "警告: 部分 feeds 更新失败，继续进行..."
+          ./scripts/feeds install -a -f || echo "警告: 部分 feeds 安装失败，继续进行..."
 
           # 如果启用 AdGuardHome，则克隆包
           if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
@@ -181,6 +186,16 @@ jobs:
             echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
             echo "启用 MosDNS"
           fi
+          if [ "${{ inputs.enable_dockerman }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
+            echo "CONFIG_PACKAGE_docker=y" >> .config
+            echo "CONFIG_PACKAGE_docker-compose=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-veth=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-dm=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-br-netfilter=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
+            echo "启用 DockerMan"
+          fi
 
           make defconfig || true
       - name: 验证构建配置
@@ -205,6 +220,9 @@ jobs:
           fi
           if [ "${{ inputs.enable_mosdns }}" = "true" ]; then
             grep -E "CONFIG_PACKAGE_(mosdns|luci-app-mosdns)=" .config || echo "MosDNS 包未找到"
+          fi
+          if [ "${{ inputs.enable_dockerman }}" = "true" ]; then
+            grep -E "CONFIG_PACKAGE_(luci-app-dockerman|docker)=" .config || echo "DockerMan 包未找到"
           fi
       - name: 下载并编译
         run: |
