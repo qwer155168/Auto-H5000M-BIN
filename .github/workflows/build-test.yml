@@ -363,6 +363,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+      - name: 重新创建源码目录
+        run: |
+          # 重新克隆源码（因为不同job使用不同runner）
+          if [ -d "$SOURCE_DIR/.git" ]; then
+            cd $SOURCE_DIR
+            git fetch origin $REPO_BRANCH
+            git reset --hard origin/$REPO_BRANCH
+            git clean -fd
+          else
+            rm -rf $SOURCE_DIR
+            git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
+            cd $SOURCE_DIR
+          fi
+
+          # 恢复feeds配置
+          if [ -f "$GITHUB_WORKSPACE/feeds.conf.default" ]; then
+            cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
+          fi
       - name: 恢复下载缓存
         uses: actions/cache@v4
         with:
@@ -386,6 +404,60 @@ jobs:
           key: ${{ runner.os }}-ccache-${{ env.CONFIG_FILE }}-${{ hashFiles('**/feeds.conf.default') }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ env.CONFIG_FILE }}-
+      - name: 深度清理磁盘空间
+        run: |
+          echo "🧹 执行深度磁盘清理..."
+          
+          # 显示当前磁盘使用情况
+          echo "=== 清理前磁盘状态 ==="
+          df -h || true
+          
+          # 清理Docker相关
+          echo "清理Docker..."
+          docker system prune -f || true
+          docker image prune -f || true
+          docker volume prune -f || true
+          
+          # 清理系统缓存
+          echo "清理系统缓存..."
+          sudo apt-get clean || true
+          sudo apt-get autoclean || true
+          sudo rm -rf /var/lib/apt/lists/* || true
+          
+          # 清理临时文件
+          echo "清理临时文件..."
+          sudo rm -rf /tmp/* || true
+          sudo rm -rf /var/tmp/* || true
+          rm -rf ~/.cache/* || true
+          
+          # 清理日志文件
+          echo "清理日志文件..."
+          sudo find /var/log -type f -name "*.log" -exec truncate -s 0 {} \; || true
+          sudo rm -rf /var/log/journal/* || true
+          
+          # 清理GitHub Actions缓存
+          echo "清理GitHub Actions缓存..."
+          rm -rf /home/runner/.cache || true
+          
+          # 清理源码目录外的其他文件
+          echo "清理工作目录..."
+          find . -maxdepth 1 -name "*.log" -delete || true
+          find . -maxdepth 1 -name "*.tmp" -delete || true
+          
+          # 显示清理后磁盘状态
+          echo "=== 清理后磁盘状态 ==="
+          df -h || true
+          
+          # 检查可用空间
+          AVAILABLE_GB=$(df / | tail -1 | awk '{print int($4/1024/1024)}')
+          echo "可用空间: ${AVAILABLE_GB}GB"
+          
+          if [ $AVAILABLE_GB -lt 20 ]; then
+            echo "⚠️ 警告: 可用空间不足20GB，可能影响编译"
+            exit 1
+          else
+            echo "✅ 磁盘空间充足，可以开始编译"
+          fi
       - name: 编译固件
         run: |
           cd $SOURCE_DIR
@@ -428,6 +500,18 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+      - name: 清理打包环境
+        run: |
+          echo "🧹 清理打包环境..."
+          
+          # 清理Docker和系统缓存
+          docker system prune -f || true
+          sudo apt-get clean || true
+          sudo rm -rf /tmp/* || true
+          
+          # 显示磁盘状态
+          echo "=== 打包前磁盘状态 ==="
+          df -h || true
       - name: 恢复编译结果
         uses: actions/cache@v4
         with:
