@@ -316,45 +316,145 @@ jobs:
             golang-go autoconf automake libtool patch make gcc g++
 
       - name: 源码和依赖准备
+        timeout-minutes: 25
         run: |
+          set -e
           echo "📥 准备源码和依赖..."
 
-          # 克隆或更新源码
-          if [ ! -d "$SOURCE_DIR/.git" ]; then
-            echo "📥 克隆源码..."
-            git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
-          else
-            echo "📥 更新源码..."
-            cd $SOURCE_DIR
-            git fetch origin $REPO_BRANCH
-            git reset --hard origin/$REPO_BRANCH
-            git clean -fd
-          fi
+          # 显示磁盘空间状态
+          echo "💾 当前磁盘状态:"
+          df -h /
 
-          # 设置feeds
-          cd $SOURCE_DIR
-          if [ -f "$GITHUB_WORKSPACE/feeds.conf.default" ]; then
-            cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
-          fi
+          # 并行执行源码准备和feeds配置
+          {
+            # 任务1：克隆或更新源码
+            echo "📥 [1/3] 准备源码..."
+            START_TIME=$(date +%s)
 
-          # 动态添加feeds
-          if [ "${{ inputs.enable_mihomo }}" = "true" ] && ! grep -q "mihomo" feeds.conf.default 2>/dev/null; then
-            echo 'src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main' >> feeds.conf.default
-          fi
-          if [ "${{ inputs.enable_qmodem_next }}" = "true" ] || [ "${{ inputs.enable_qmodem }}" = "true" ]; then
-            if ! grep -q "qmodem" feeds.conf.default 2>/dev/null; then
-              echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
+            if [ ! -d "$SOURCE_DIR/.git" ]; then
+              echo "📥 首次克隆源码..."
+              git config --global http.postBuffer 1048576000
+              git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
+              echo "✅ 源码克隆完成"
+            else
+              echo "📥 更新源码..."
+              cd $SOURCE_DIR
+              git config --global http.postBuffer 1048576000
+              git remote prune origin
+              git fetch origin $REPO_BRANCH --depth=1 || echo "⚠️ fetch失败，使用本地版本"
+              git reset --hard origin/$REPO_BRANCH
+              git clean -fd
+              echo "✅ 源码更新完成"
             fi
+
+            END_TIME=$(date +%s)
+            echo "⏱️ 源码准备耗时: $((END_TIME - START_TIME))秒"
+          } &
+          SOURCE_PID=$!
+
+          {
+            # 任务2：准备feeds配置
+            echo "📝 [2/3] 准备feeds配置..."
+
+            # 创建临时目录
+            mkdir -p feeds_temp
+            cd feeds_temp
+
+            # 复制基础配置
+            if [ -f "$GITHUB_WORKSPACE/feeds.conf.default" ]; then
+              cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
+              echo "✅ 使用自定义feeds配置"
+            else
+              # 创建基础配置
+              cat > feeds.conf.default << 'EOF'
+          src-git packages https://github.com/immortalwrt/packages.git;openwrt-24.10
+          src-git luci https://github.com/immortalwrt/luci.git;openwrt-24.10
+          src-git routing https://github.com/openwrt/routing.git;openwrt-24.10
+          src-git telephony https://github.com/openwrt/telephony.git;openwrt-24.10
+          EOF
+              echo "✅ 使用默认feeds配置"
+            fi
+
+            # 动态添加feeds
+            if [ "${{ inputs.enable_mihomo }}" = "true" ]; then
+              echo 'src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main' >> feeds.conf.default
+              echo "✅ 添加mihomo feed"
+            fi
+            if [ "${{ inputs.enable_qmodem_next }}" = "true" ] || [ "${{ inputs.enable_qmodem }}" = "true" ]; then
+              echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
+              echo "✅ 添加qmodem feed"
+            fi
+
+            echo "✅ Feeds配置准备完成"
+          } &
+          FEEDS_PID=$!
+
+          # 等待前两个任务完成
+          echo "⏳ 等待源码和配置准备完成..."
+          wait $SOURCE_PID $FEEDS_PID
+
+          # 应用feeds配置
+          cd $SOURCE_DIR
+          cp feeds_temp/feeds.conf.default ./feeds.conf.default
+          echo "✅ Feeds配置已应用"
+
+          # 任务3：更新feeds（如果需要）
+          set +e
+          if [ ! -d "staging_dir/host" ] || [ "${{ needs.analyze.outputs.needs-rebuild }}" = "true" ]; then
+            echo "🔄 [3/3] 更新feeds..."
+            START_TIME=$(date +%s)
+
+            # 优化feeds更新
+            echo "📊 开始feeds update..."
+            timeout 300 ./scripts/feeds update -a &
+            UPDATE_PID=$!
+
+            # 等待一段时间后开始install
+            sleep 60
+
+            echo "📦 开始feeds install..."
+            timeout 600 ./scripts/feeds install -a -f &
+            INSTALL_PID=$!
+
+            # 监控进度
+            while kill -0 $UPDATE_PID 2>/dev/null || kill -0 $INSTALL_PID 2>/dev/null; do
+              sleep 30
+              echo "⏳ Feeds更新进行中..."
+
+              # 显示磁盘使用情况
+              if [ -d "dl" ]; then
+                DL_SIZE=$(du -sh dl 2>/dev/null | cut -f1)
+                echo "📁 DL目录大小: $DL_SIZE"
+              fi
+            done
+
+            # 等待完成
+            wait $UPDATE_PID 2>/dev/null
+            wait $INSTALL_PID 2>/dev/null
+
+            END_TIME=$(date +%s)
+            echo "⏱️ Feeds更新耗时: $((END_TIME - START_TIME))秒"
+
+            # 检查结果
+            if [ -d "staging_dir/host" ]; then
+              echo "✅ Feeds更新成功"
+            else
+              echo "⚠️ Feeds更新未完全成功，尝试快速修复..."
+              timeout 120 ./scripts/feeds install -a || echo "⚠️ 快速修复也失败，继续构建"
+            fi
+          else
+            echo "✅ Feeds已存在且最新，跳过更新"
           fi
 
-          # 更新feeds（如果需要）
-          if [ ! -d "staging_dir/host" ] || [ "${{ needs.analyze.outputs.needs-rebuild }}" = "true" ]; then
-            echo "🔄 更新feeds..."
-            ./scripts/feeds update -a || echo "feeds update failed"
-            ./scripts/feeds install -a -f || echo "feeds install failed"
-          else
-            echo "✅ feeds已存在，跳过更新"
-          fi
+          set -e
+
+          # 最终状态检查
+          echo "📊 准备完成状态:"
+          echo "- 源码目录: $([ -d "$SOURCE_DIR/.git" ] && echo "✅ 存在" || echo "❌ 缺失")"
+          echo "- Feeds配置: $([ -f "$SOURCE_DIR/feeds.conf.default" ] && echo "✅ 存在" || echo "❌ 缺失")"
+          echo "- Staging目录: $([ -d "$SOURCE_DIR/staging_dir/host" ] && echo "✅ 存在" || echo "⚠️ 缺失")"
+
+          echo "✅ 源码和依赖准备完成"
 
       - name: 修复依赖和补丁
         run: |
@@ -431,7 +531,7 @@ jobs:
           make defconfig
           echo "✅ 配置完成"
 
-      - name: 智能编译
+          - name: 智能编译
         timeout-minutes: ${{ inputs.max_build_time }}
         run: |
           cd $SOURCE_DIR
@@ -528,7 +628,7 @@ jobs:
           fi
 
           # 生成清单
-          cat > $GITHUB_WORKSPACE/artifacts/MANIFEST.txt << EOF
+          cat > $GITHUB_WORKSPACE/artifacts/MANIFEST.txt << 'EOF'
           ╔════════════════════════════════════════════════╗
           ║    ImmortalWrt H5000M 智能构建报告             ║
           ╚════════════════════════════════════════════════╝
