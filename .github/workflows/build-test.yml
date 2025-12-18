@@ -126,6 +126,11 @@ jobs:
             exit 1
           fi
 
+          # 安装主机构建依赖（可能需要一段时间）
+          echo "🔧 安装主机构建依赖..."
+          sudo apt-get update || true
+          sudo apt-get install -y build-essential git ccache pkg-config cmake python3 python3-pip libncurses5-dev libssl-dev libgmp3-dev libmbedtls-dev rustc cargo golang-go autoconf automake libtool patch make gcc g++ || true
+
           echo "✅ 环境清理完成"
           df -h /
 
@@ -163,10 +168,12 @@ jobs:
             ~/.ccache
             ${{ env.SOURCE_DIR }}/staging_dir/host
             ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/staging_dir/target-*
           key: ${{ runner.os }}-toolchain-${{ env.REPO_BRANCH }}-v1
           restore-keys: |
             ${{ runner.os }}-toolchain-${{ env.REPO_BRANCH }}-
             ${{ runner.os }}-toolchain-
+          compression-level: 6
 
       - name: 克隆源码
         run: |
@@ -194,6 +201,14 @@ jobs:
             cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
           fi
           
+          # 根据输入条件添加 feeds，避免不必要的克隆
+          if [ "${{ inputs.enable_mihomo }}" = "true" ]; then
+            grep -q "mihomo" feeds.conf.default || echo 'src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main' >> feeds.conf.default
+          fi
+          if [ "${{ inputs.enable_qmodem_next }}" = "true" ] || [ "${{ inputs.enable_qmodem }}" = "true" ]; then
+            grep -q "qmodem" feeds.conf.default || echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
+          fi
+          
           # 更新 feeds，允许部分失败
           ./scripts/feeds update -a 2>&1 | grep -E "^(Scanning|Updating)" || true
           ./scripts/feeds install -a -f 2>&1 | tail -5 || true
@@ -207,23 +222,27 @@ jobs:
           echo "🔧 依赖修复与补丁应用..."
 
           echo "克隆额外软件包..."
-          # 克隆 luci-app-adguardhome (如果不存在)
-          [ ! -d "package/luci-app-adguardhome" ] && \
-            git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome || true
-
-          # 修复 luci-app-adguardhome 的安装脚本（/usr/bin/AdGuardHome 路径冲突问题）
-          AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
-          if [ -f "$AGH_LUCI_SCRIPT" ]; then
-            # 在移动/复制前先清理并创建正确的目录结构
-            sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
+          # 只克隆启用的包，避免不必要的克隆
+          if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
+            [ ! -d "package/luci-app-adguardhome" ] && \
+              git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome || true
           fi
 
-          # 修复 AdGuardHome 初始化脚本
-          AGH_LUCI_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
-          if [ -f "$AGH_LUCI_INIT" ]; then
-            # 确保 /usr/bin/AdGuardHome 是目录
-            sed -i '/^#!/a\\
+          # 修复 AdGuardHome 的安装脚本（如果启用）
+          if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
+            AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
+            if [ -f "$AGH_LUCI_SCRIPT" ]; then
+              # 在移动/复制前先清理并创建正确的目录结构
+              sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
+            fi
+
+            # 修复 AdGuardHome 初始化脚本
+            AGH_LUCI_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
+            if [ -f "$AGH_LUCI_INIT" ]; then
+              # 确保 /usr/bin/AdGuardHome 是目录
+              sed -i '/^#!/a\\
             [ -f /usr/bin/AdGuardHome ] && rm -f /usr/bin/AdGuardHome && mkdir -p /usr/bin/AdGuardHome' "$AGH_LUCI_INIT" || true
+            fi
           fi
 
           echo "修复依赖警告..."
@@ -257,18 +276,20 @@ jobs:
             sed -i 's/+kmod-mt_wifi_osal//g' "$MT_HWIFI_MK" || true
           fi
 
-          # 5. 修复 AdGuardHome 安装冲突
-          AGH_INIT="package/feeds/packages/adguardhome/files/etc/init.d/AdGuardHome"
-          if [ -f "$AGH_INIT" ]; then
-            # 添加清理和重建逻辑到初始化脚本
-            sed -i '/^#!/a\\
+          # 5. 修复 AdGuardHome 安装冲突（如果启用）
+          if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
+            AGH_INIT="package/feeds/packages/adguardhome/files/etc/init.d/AdGuardHome"
+            if [ -f "$AGH_INIT" ]; then
+              # 添加清理和重建逻辑到初始化脚本
+              sed -i '/^#!/a\\
             # 清理冲突的 /usr/bin/AdGuardHome 路径\\
             [ -e /usr/bin/AdGuardHome ] && rm -rf /usr/bin/AdGuardHome\\
             mkdir -p /usr/bin/AdGuardHome' "$AGH_INIT" || true
-          fi
+            fi
 
-          # 同时移除包中的冲突文件定义
-          rm -rf package/feeds/packages/adguardhome/files/usr/bin/AdGuardHome 2>/dev/null || true
+            # 同时移除包中的冲突文件定义
+            rm -rf package/feeds/packages/adguardhome/files/usr/bin/AdGuardHome 2>/dev/null || true
+          fi
 
           echo "依赖修复完成"
 
@@ -311,9 +332,11 @@ jobs:
             ${{ env.SOURCE_DIR }}/dl
             ${{ env.SOURCE_DIR }}/staging_dir/host
             ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/staging_dir/target-*
           key: ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-${{ steps.cache-key.outputs.key }}
           restore-keys: |
             ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-
+          compression-level: 6
 
   # ============================================================================
   # Job 3: 编译固件 (30-90 分钟, 首次; 5-30 分钟, 后续)
@@ -334,9 +357,11 @@ jobs:
             ${{ env.SOURCE_DIR }}/dl
             ${{ env.SOURCE_DIR }}/staging_dir/host
             ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/staging_dir/target-*
           key: ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-${{ needs.download.outputs.cache-key }}
           restore-keys: |
             ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-
+          compression-level: 6
 
       - name: 恢复 ccache
         uses: actions/cache@v4
@@ -475,6 +500,66 @@ jobs:
           check_pkg "luci-app-openclash" "OpenClash"
           check_pkg "docker" "Docker"
 
+      - name: 诊断：主机包单编译（gmp/openssl/mbedtls/golang/rust）
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          cd $SOURCE_DIR
+          packages=(
+            "package/libs/gmp"
+            "package/libs/openssl"
+            "package/libs/mbedtls"
+            "package/feeds/packages/golang"
+            "package/feeds/packages/rust"
+          )
+          for p in "${packages[@]}"; do
+            base=$(basename "$p")
+            echo "==== 编译 $p host (V=s) ===="
+            rm -f /tmp/${base}_host_build.log || true
+            if make ${p}/host/compile V=s -j1 2>&1 | tee /tmp/${base}_host_build.log; then
+              echo "✅ $p 编译成功"
+            else
+              echo "❌ $p 编译失败，输出最后 200 行日志："
+              tail -n 200 /tmp/${base}_host_build.log || true
+            fi
+          done
+
+      - name: 保存主机依赖诊断日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-deps-logs-${{ github.run_number }}
+          path: /tmp/*_host_build.log
+          retention-days: 1
+
+      - name: 编译前磁盘检查
+        run: |
+          set -euxo pipefail
+          echo "🔍 [编译前] 检查磁盘空间..."
+          df -h /
+          AVAIL_KB=$(df --output=avail / | tail -n1 | tr -d ' ')
+          echo "✅ 可用磁盘 (KB): $AVAIL_KB"
+          MIN_KB=$((4 * 1024 * 1024))  # 4GB 阈值
+          if [ "$AVAIL_KB" -lt "$MIN_KB" ]; then
+            echo "❌ 可用磁盘小于 4GB ($MIN_KB KB)，尝试清理多余文件..."
+            # 清理临时文件和缓存
+            sudo rm -rf /tmp/* /var/tmp/* ~/.cache/* 2>/dev/null || true
+            sudo rm -rf ${{ env.SOURCE_DIR }}/build_dir/* ${{ env.SOURCE_DIR }}/staging_dir/target-* ${{ env.SOURCE_DIR }}/bin/targets/* 2>/dev/null || true
+            docker system prune -af || true
+            sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
+            # 重新检查
+            df -h /
+            AVAIL_KB_NEW=$(df --output=avail / | tail -n1 | tr -d ' ')
+            echo "✅ 清理后可用磁盘 (KB): $AVAIL_KB_NEW"
+            if [ "$AVAIL_KB_NEW" -lt "$MIN_KB" ]; then
+              echo "❌ 清理后仍不足，请手动清理 runner。"
+              exit 1
+            fi
+            echo "✅ 清理成功，磁盘空间充足，开始编译"
+          else
+            echo "✅ 磁盘空间充足，开始编译"
+          fi
+
       - name: 编译固件 (多线程)
         run: |
           cd $SOURCE_DIR
@@ -484,7 +569,7 @@ jobs:
           echo "🔨 [编译阶段] 使用 $THREADS 线程编译..."
           START_TIME=$(date +%s)
           
-          if make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m 2>&1 | tee /tmp/build.log | tail -30; then
+          if make -j$THREADS V=s BUILD_LOG=1 IGNORE_ERRORS=m 2>&1 | tee /tmp/build.log | tail -30; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
             echo "✅ 编译成功 (耗时: ${DURATION}s)"
@@ -499,13 +584,44 @@ jobs:
             fi
           fi
 
+      - name: 缓存前磁盘检查
+        run: |
+          set -euxo pipefail
+          echo "🔍 [缓存前] 检查磁盘空间..."
+          df -h /
+          AVAIL_KB=$(df --output=avail / | tail -n1 | tr -d ' ')
+          echo "✅ 可用磁盘 (KB): $AVAIL_KB"
+          MIN_KB=$((3 * 1024 * 1024))  # 3GB 阈值，缓存前更严格
+          if [ "$AVAIL_KB" -lt "$MIN_KB" ]; then
+            echo "❌ 可用磁盘小于 3GB ($MIN_KB KB)，尝试清理多余文件..."
+            # 清理临时文件和缓存
+            sudo rm -rf /tmp/* /var/tmp/* ~/.cache/* 2>/dev/null || true
+            sudo rm -rf ${{ env.SOURCE_DIR }}/build_dir/* ${{ env.SOURCE_DIR }}/staging_dir/target-* ${{ env.SOURCE_DIR }}/bin/targets/* 2>/dev/null || true
+            docker system prune -af || true
+            sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
+            # 重新检查
+            df -h /
+            AVAIL_KB_NEW=$(df --output=avail / | tail -n1 | tr -d ' ')
+            echo "✅ 清理后可用磁盘 (KB): $AVAIL_KB_NEW"
+            if [ "$AVAIL_KB_NEW" -lt "$MIN_KB" ]; then
+              echo "❌ 清理后仍不足，请手动清理 runner。"
+              exit 1
+            fi
+            echo "✅ 清理成功，磁盘空间充足，开始缓存"
+          else
+            echo "✅ 磁盘空间充足，开始缓存"
+          fi
+
       - name: 保存编译缓存
         uses: actions/cache@v4
         with:
           path: |
             ${{ env.SOURCE_DIR }}/staging_dir/host
             ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/staging_dir/target-*
+            # 全部缓存 staging_dir 以加速后续构建
           key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ needs.download.outputs.cache-key }}
+          compression-level: 6
 
       - name: 编译后清理 (释放磁盘)
         if: always()
