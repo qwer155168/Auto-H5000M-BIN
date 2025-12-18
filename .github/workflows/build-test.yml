@@ -394,7 +394,7 @@ jobs:
             ${{ env.SOURCE_DIR }}/build_dir/toolchain-*
             ${{ env.SOURCE_DIR }}/.config
             ${{ env.SOURCE_DIR }}/feeds.conf.default
-          key: download-${{ needs.download.outputs.cache-key }}
+          key: download-${{ steps.cache-key.outputs.key }}
           restore-keys: |
             download-
       - name: 恢复编译器缓存
@@ -506,7 +506,7 @@ jobs:
 
   package:  # 打包作业
     runs-on: ubuntu-22.04  # 运行环境
-    needs: [download, build]
+    needs: download
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -517,50 +517,27 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           echo "🧹 深度清理打包环境..."
-
-          # 显示清理前磁盘状态
-          echo "=== 清理前磁盘状态 ==="
           df -h || true
-
-          # 删除 Docker 镜像和容器
-          echo "清理Docker镜像和容器..."
           docker rmi $(docker images -q) 2>/dev/null || true
           docker system prune -f || true
           docker image prune -f || true
           docker volume prune -f || true
-
-          # 删除不需要的大型组件
-          echo "删除大型组件..."
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android \
             /opt/ghc /etc/mysql /etc/php /usr/local/share/boost /usr/share/swift \
             /opt/hostedtoolcache /usr/local/.ghcup /usr/local/graalvm /imagegeneration || true
-
-          # 卸载不需要的软件
-          echo "卸载不需要的软件..."
           sudo -E apt-get -y purge azure-cli* docker* ghc* zulu* hhvm* llvm* firefox* \
             google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* \
             mongodb* moby* snap* || true
-
-          # 清理系统缓存和临时文件
-          echo "清理系统缓存和临时文件..."
           sudo apt-get clean || true
           sudo apt-get autoclean || true
           sudo rm -rf /var/lib/apt/lists/* || true
           sudo rm -rf /tmp/* || true
           sudo rm -rf /var/tmp/* || true
           rm -rf ~/.cache/* || true
-
-          # 清理旧的构建目录
-          echo "清理旧的构建文件..."
           rm -rf immortalwrt || true
           rm -rf /tmp/opkg-* || true
-
-          # 检查并清理磁盘空间
-          echo "💾 检查磁盘空间..."
           df -h || true
           echo "可用空间: $(df / | tail -1 | awk '{print $4}')"
-
-          # 如果空间不足，执行额外清理
           if [ $(df / | tail -1 | awk '{print $4}' | sed 's/G//') -lt 20 ]; then
             echo "⚠️ 磁盘空间不足，执行额外清理..."
             sudo rm -rf /var/log/* || true
@@ -584,6 +561,7 @@ jobs:
             echo "未找到构建产物，跳过上传"
             exit 1
           fi
+
       - name: 上传到 Actions
         uses: actions/upload-artifact@v4
         if: success()
@@ -591,6 +569,7 @@ jobs:
           name: ImmortalWrt-MT7987-${{ github.run_number }}
           path: artifacts/
           retention-days: 30
+
       - name: 创建预发布
         uses: softprops/action-gh-release@v1
         if: success() && hashFiles('artifacts/*') != ''
@@ -605,11 +584,8 @@ jobs:
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - name: 缓存编译器缓存
+
+      - name: 缓存 ccache
         uses: actions/cache@v4
         with:
           path: |
@@ -887,23 +863,22 @@ jobs:
           if [ "${{ inputs.enable_mwan }}" = "true" ]; then
             grep -E "CONFIG_PACKAGE_(luci-app-qmodem-mwan|mwan3)=" .config || echo "MWAN 包未找到"
           fi
+
+      - name: 检查磁盘空间与清理缓存
         run: |
           cd $SOURCE_DIR
-
-          # 检查磁盘空间
           echo "💾 检查磁盘空间..."
           df -h || true
           echo "可用空间: $(df / | tail -1 | awk '{print $4}')"
-
-          # 清理可能的损坏文件
           echo "🧹 清理构建缓存..."
           find dl -name "*.dl" -size -1024c -delete 2>/dev/null || true
           find dl -name "*.dl.*" -size -1024c -delete 2>/dev/null || true
 
+      - name: 下载依赖
+        run: |
+          cd $SOURCE_DIR
           THREADS=$(($(nproc) + 1))
           export PATH="/usr/lib/ccache:$PATH"
-
-          # 下载阶段 - 增加重试和错误处理
           echo "📥 开始下载..."
           for i in 1 2 3; do
             echo "下载尝试 $i/3..."
@@ -917,8 +892,11 @@ jobs:
             fi
           done
 
+      - name: 编译固件
+        run: |
+          cd $SOURCE_DIR
+          THREADS=$(($(nproc) + 1))
           echo "🔨 开始编译 (${THREADS} 线程)..."
-          # 编译阶段 - 减少并行度以避免内存问题
           if ! make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m; then
             echo "⚠️ 并行编译失败，尝试单线程编译..."
             make -j1 V=s || true
