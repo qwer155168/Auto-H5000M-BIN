@@ -405,6 +405,24 @@ jobs:
           fi
 
           make defconfig
+
+          # 强制禁用不需要的包
+          disabled_packages=("luci-app-wrtbwmon" "luci-app-rclone" "rclone" "rclone-ng" "rclone-webui-react")
+          for pkg in "${disabled_packages[@]}"; do
+            sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
+            echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
+          done
+
+          # 验证禁用包是否生效
+          echo "🔍 验证禁用包状态..."
+          for pkg in "${disabled_packages[@]}"; do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+              echo "❌ 警告: $pkg 仍被启用"
+            else
+              echo "✅ $pkg 已禁用"
+            fi
+          done
+
           echo "✅ 配置完成"
 
       - name: 打包源码
