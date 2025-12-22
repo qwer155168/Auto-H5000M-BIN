@@ -212,8 +212,24 @@ jobs:
 
           # 下载额外包
           if [ "${{ steps.set-env.outputs.enable_adguardhome }}" = "true" ]; then
-            if [ ! -d "package/luci-app-adguardhome" ]; then
-              git clone --depth=1 https://github.com/MIAOBUSI/luci-app-adguardhome.git package/luci-app-adguardhome || true
+            # 克隆 luci-app-adguardhome (如果不存在)
+            [ ! -d "package/luci-app-adguardhome" ] && \
+              git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome
+            
+            # 修复 luci-app-adguardhome 的安装脚本（/usr/bin/AdGuardHome 路径冲突问题）
+            # 问题：脚本假设 /usr/bin/AdGuardHome 是目录，但可能是文件
+            AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
+            if [ -f "$AGH_LUCI_SCRIPT" ]; then
+              # 在移动/复制前先清理并创建正确的目录结构
+              sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
+            fi
+            
+            # 修复 AdGuardHome 初始化脚本
+            AGH_LUCI_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
+            if [ -f "$AGH_LUCI_INIT" ]; then
+              # 确保 /usr/bin/AdGuardHome 是目录
+              sed -i '/^#!/a\
+            [ -f /usr/bin/AdGuardHome ] && rm -f /usr/bin/AdGuardHome && mkdir -p /usr/bin/AdGuardHome' "$AGH_LUCI_INIT" || true
             fi
           fi
 
@@ -234,27 +250,7 @@ jobs:
               git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
             fi
           fi
-
-          # 修复 AdGuardHome 路径问题
-          if [ "${{ steps.set-env.outputs.enable_adguardhome }}" = "true" ]; then
-            # 修复安装脚本
-            AGH_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
-            [ -f "$AGH_SCRIPT" ] && sed -i 's|mv /usr/bin/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv|g' "$AGH_SCRIPT" || true
-            
-            # 修复初始化脚本
-            AGH_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
-            if [ -f "$AGH_INIT" ]; then
-              # 确保 /usr/bin/AdGuardHome 是目录
-              sed -i '/^#!/a\
-          # 清理冲突的 /usr/bin/AdGuardHome 路径\
-          [ -e /usr/bin/AdGuardHome ] && rm -rf /usr/bin/AdGuardHome\
-          mkdir -p /usr/bin/AdGuardHome' "$AGH_INIT" || true
-            fi
-            
-            # 移除冲突的文件定义
-            rm -rf package/feeds/packages/adguardhome/files/usr/bin/AdGuardHome 2>/dev/null || true
-          fi
-
+          
           # 移除问题包
           rm -rf package/feeds/packages/{exim,onionshare-cli,python-zope-event,python-zope-interface,python-gevent,python-twisted} 2>/dev/null || true
 
