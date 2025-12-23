@@ -189,12 +189,10 @@ jobs:
           fi
 
           # feeds.conf.default 和 feeds 目录/索引彻底同步，彻底避免 nikki 报错
-          # 先清理所有 nikki 相关目录和索引
           rm -rf feeds/nikki feeds/nikki.* feeds/nikki* feeds/nikki.index 2>/dev/null || true
 
           # 动态管理 feeds.conf.default
           if [ "${{ steps.set-env.outputs.enable_nikki }}" = "true" ]; then
-            # nikki 默认已启用，无需添加
             :
           else
             sed -i '/src-git nikki/d' feeds.conf.default
@@ -202,20 +200,19 @@ jobs:
 
           # QModem feed
           if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ] || [ "${{ steps.set-env.outputs.enable_qmodem }}" = "true" ]; then
-            # qmodem 默认已启用，无需添加
             :
           else
             sed -i '/qmodem/d' feeds.conf.default
           fi
-          # HomeProxy feed
-          if [ "${{ steps.set-env.outputs.enable_homeproxy }}" = "true" ]; then
-            if ! grep -q "homeproxy" feeds.conf.default; then
-              echo 'src-git homeproxy https://github.com/HomeProxy/immortalwrt-homeproxy.git;main' >> feeds.conf.default
+
+          # Adbyby Plus feed
+          if [ "${{ steps.set-env.outputs.enable_adbyby_plus }}" = "true" ]; then
+            if ! grep -q "coolsnowwolf_luci" feeds.conf.default; then
+              echo 'src-git coolsnowwolf_luci https://github.com/coolsnowwolf/luci.git;master' >> feeds.conf.default
             fi
           else
-            sed -i '/homeproxy/d' feeds.conf.default
+            sed -i '/coolsnowwolf_luci/d' feeds.conf.default
           fi
-          # Adbyby Plus feed
           if [ "${{ steps.set-env.outputs.enable_adbyby_plus }}" = "true" ]; then
             if ! grep -q "coolsnowwolf_luci" feeds.conf.default; then
               echo 'src-git coolsnowwolf_luci https://github.com/coolsnowwolf/luci.git;master' >> feeds.conf.default
@@ -236,22 +233,16 @@ jobs:
 
           # 下载额外包
           if [ "${{ steps.set-env.outputs.enable_adguardhome }}" = "true" ]; then
-            # 克隆 luci-app-adguardhome (如果不存在)
             [ ! -d "package/luci-app-adguardhome" ] && \
               git clone --depth=1 https://github.com/kongfl888/luci-app-adguardhome.git package/luci-app-adguardhome
             
-            # 修复 luci-app-adguardhome 的安装脚本（/usr/bin/AdGuardHome 路径冲突问题）
-            # 问题：脚本假设 /usr/bin/AdGuardHome 是目录，但可能是文件
             AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
             if [ -f "$AGH_LUCI_SCRIPT" ]; then
-              # 在移动/复制前先清理并创建正确的目录结构
               sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
             fi
             
-            # 修复 AdGuardHome 初始化脚本
             AGH_LUCI_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
             if [ -f "$AGH_LUCI_INIT" ]; then
-              # 确保 /usr/bin/AdGuardHome 是目录
               sed -i '/^#!/a\
             [ -f /usr/bin/AdGuardHome ] && rm -f /usr/bin/AdGuardHome && mkdir -p /usr/bin/AdGuardHome' "$AGH_LUCI_INIT" || true
             fi
@@ -259,14 +250,11 @@ jobs:
 
           # MosDNS 安装步骤
           if [ "${{ steps.set-env.outputs.enable_mosdns }}" = "true" ]; then
-            # 更新 golang 到 24.x 版本
             if [ ! -d "feeds/packages/lang/golang" ] || [ ! -f "feeds/packages/lang/golang/Makefile" ]; then
               rm -rf feeds/packages/lang/golang
               git clone https://github.com/sbwml/packages_lang_golang -b 24.x feeds/packages/lang/golang
             fi
-            # 移除冲突的 v2ray-geodata 包
             rm -rf feeds/packages/net/v2ray-geodata
-            # 克隆 MosDNS 和 v2ray-geodata 包
             if [ ! -d "package/mosdns" ]; then
               git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
             fi
@@ -275,19 +263,15 @@ jobs:
             fi
           fi
           
-          # 移除问题包
           rm -rf package/feeds/packages/{exim,onionshare-cli,python-zope-event,python-zope-interface,python-gevent,python-twisted} 2>/dev/null || true
 
-          # 修复 QModem 冲突
           rm -rf package/feeds/qmodem/ndisc6 2>/dev/null || true
 
-          # 修复 kmod-mhi-wwan 依赖
           QMODEM_MK="package/feeds/qmodem/qmodem/Makefile"
           if [ -f "$QMODEM_MK" ]; then
             sed -i 's/DEPENDS:=.*+kmod-mhi-wwan/# &/g' "$QMODEM_MK" || true
           fi
 
-          # 修复 mt_hwifi 依赖
           MT_HWIFI_MK="package/mtk/drivers/mt_hwifi/Makefile"
           if [ -f "$MT_HWIFI_MK" ]; then
             sed -i 's/+kmod-mt_wifi_osal//g' "$MT_HWIFI_MK" || true
@@ -324,10 +308,8 @@ jobs:
           fi
 
           # 根据输入动态配置包（简化：只启用顶层包，依赖由 make defconfig 自动解析）
-          # 收集要禁用的包
           disabled_pkgs=("luci-app-modem" "modem" "luci-app-sms-tool-lite" "luci-app-3ginfo-lite")
 
-          # 定义包列表（用于循环）
           packages=("adguardhome" "openclash" "nikki" "upnp" "vlmcsd" "mosdns" "dockerman" "mwan" "homeproxy" "adbyby_plus")
 
           for pkg in "${packages[@]}"; do
@@ -368,7 +350,6 @@ jobs:
             echo "CONFIG_PACKAGE_kmod-qmi_wwan_f=y" >> .config
             echo "CONFIG_PACKAGE_kmod-qmi_wwan_s=y" >> .config
             # QModem MWAN (多WAN负载均衡)
-            echo "CONFIG_PACKAGE_luci-app-qmodem-mwan=y" >> .config
             echo "CONFIG_PACKAGE_mwan3=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-mwan3=y" >> .config
             # HQOS 支持
