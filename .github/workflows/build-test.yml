@@ -65,6 +65,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable_original_modem:
+        description: '启用原版 Modem'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -96,12 +101,13 @@ jobs:
       enable_mwan: ${{ steps.set-env.outputs.enable_mwan }}
       enable_homeproxy: ${{ steps.set-env.outputs.enable_homeproxy }}
       enable_adbyby_plus: ${{ steps.set-env.outputs.enable_adbyby_plus }}
+      enable_original_modem: ${{ steps.set-env.outputs.enable_original_modem }}
     steps:
       - name: 设置环境变量
         id: set-env
         run: |
           # 使用循环设置输出变量
-          for var in adguardhome openclash nikki upnp vlmcsd mosdns dockerman qmodem_next qmodem mwan homeproxy adbyby_plus; do
+          for var in adguardhome openclash nikki upnp vlmcsd mosdns dockerman qmodem_next qmodem mwan homeproxy adbyby_plus original_modem; do
             value="${!var}"
             [ -z "$value" ] && value="false"
             echo "enable_$var=$value" >> $GITHUB_OUTPUT
@@ -297,6 +303,14 @@ jobs:
             echo "❌ 错误: 不能同时启用 QModem Next 和 QModem！"
             exit 1
           fi
+          if [ "${{ steps.set-env.outputs.enable_original_modem }}" = "true" ] && [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ]; then
+            echo "❌ 错误: 不能同时启用原版 Modem 和 QModem Next！"
+            exit 1
+          fi
+          if [ "${{ steps.set-env.outputs.enable_original_modem }}" = "true" ] && [ "${{ steps.set-env.outputs.enable_qmodem }}" = "true" ]; then
+            echo "❌ 错误: 不能同时启用原版 Modem 和 QModem！"
+            exit 1
+          fi
 
           # 下载基础配置
           curl -fsSL "$CONFIG_URL" -o base.config || {
@@ -305,11 +319,6 @@ jobs:
 
           cat base.config > .config
 
-          # 确保禁用冲突的modem包
-          sed -i '/^CONFIG_PACKAGE_luci-app-modem=/d; /^CONFIG_PACKAGE_modem=/d' .config
-          echo "# CONFIG_PACKAGE_luci-app-modem is not set" >> .config
-          echo "# CONFIG_PACKAGE_modem is not set" >> .config
-
           # 应用额外配置
           if [ -f "$GITHUB_WORKSPACE/h5000m.extra.config" ]; then
             echo "📄 应用额外配置..."
@@ -317,7 +326,7 @@ jobs:
           fi
 
           # 根据输入动态配置包（简化：只启用顶层包，依赖由 make defconfig 自动解析）
-          disabled_pkgs=("luci-app-modem" "modem" "luci-app-sms-tool-lite" "luci-app-3ginfo-lite")
+          disabled_pkgs=("luci-app-sms-tool-lite" "luci-app-3ginfo-lite")
 
           packages=("adguardhome" "openclash" "nikki" "upnp" "vlmcsd" "mosdns" "dockerman" "mwan" "homeproxy" "adbyby_plus")
 
@@ -328,6 +337,14 @@ jobs:
               disabled_pkgs+=("luci-app-$pkg")
             fi
           done
+
+          # 原版 Modem 处理（互斥）
+          if [ "${{ steps.set-env.outputs.enable_original_modem }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_luci-app-modem=y" >> .config
+            echo "CONFIG_PACKAGE_modem=y" >> .config
+          else
+            disabled_pkgs+=("luci-app-modem" "modem")
+          fi
 
           # QModem 特殊处理（互斥）
           if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ]; then
@@ -563,6 +580,7 @@ jobs:
           • MWAN:          ${{ needs.prepare.outputs.enable_mwan }}
           • HomeProxy:     ${{ needs.prepare.outputs.enable_homeproxy }}
           • Adbyby Plus:   ${{ needs.prepare.outputs.enable_adbyby_plus }}
+          • 原版 Modem:    ${{ needs.prepare.outputs.enable_original_modem }}
 
           📦 产物文件:
           EOF
@@ -601,6 +619,7 @@ jobs:
             - MWAN: ${{ needs.prepare.outputs.enable_mwan }}
             - HomeProxy: ${{ needs.prepare.outputs.enable_homeproxy }}
             - Adbyby Plus: ${{ needs.prepare.outputs.enable_adbyby_plus }}
+            - 原版 Modem: ${{ needs.prepare.outputs.enable_original_modem }}
 
             💾 下载产物: 见下方 Artifacts
             📋 详细信息: 见 MANIFEST.txt
