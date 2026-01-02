@@ -220,68 +220,18 @@ jobs:
           echo "📋 当前 feeds.conf.default 内容:"
           cat feeds.conf.default
 
-          # 彻底清理所有 feeds 缓存 (关键: 必须在 feeds update 之前完成)
-          echo "🧹 彻底清理 feeds 缓存..."
+          # 清理 feeds 缓存
+          echo "🧹 清理 feeds 缓存..."
+          rm -rf tmp/.config* tmp/.packageinfo tmp/.targetinfo tmp/info tmp/.feeds* 2>/dev/null || true
           
-          # 清理 tmp 目录中的所有缓存
-          rm -rf tmp/.config* tmp/.packageinfo tmp/.targetinfo tmp/info 2>/dev/null || true
-          rm -rf tmp/.feeds* 2>/dev/null || true
-          
-          # 清理不需要的 feeds 目录和索引
-          if [ "${{ steps.set-env.outputs.enable_nikki }}" != "true" ]; then
-            rm -rf feeds/nikki feeds/nikki.index feeds/nikki.tmp 2>/dev/null || true
-            rm -rf package/feeds/nikki 2>/dev/null || true
-          fi
-          if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" != "true" ] && [ "${{ steps.set-env.outputs.enable_qmodem }}" != "true" ]; then
-            rm -rf feeds/qmodem feeds/qmodem.index feeds/qmodem.tmp 2>/dev/null || true
-            rm -rf package/feeds/qmodem 2>/dev/null || true
-          fi
-          # Adbyby Plus 通过 package 目录安装，无需清理 feed
+          # 清理禁用的 feeds
+          [ "${{ steps.set-env.outputs.enable_nikki }}" != "true" ] && rm -rf feeds/nikki* package/feeds/nikki 2>/dev/null || true
+          [ "${{ steps.set-env.outputs.enable_qmodem_next }}" != "true" ] && [ "${{ steps.set-env.outputs.enable_qmodem }}" != "true" ] && rm -rf feeds/qmodem* package/feeds/qmodem 2>/dev/null || true
 
           # feeds update/install
           echo "🔄 更新 feeds..."
-          
-          # 验证 feeds.conf.default 不包含已禁用的源
-          if [ "${{ steps.set-env.outputs.enable_nikki }}" != "true" ]; then
-            if grep -q "nikki" feeds.conf.default; then
-              echo "⚠️ 发现残留的 nikki 配置，正在清理..."
-              sed -i '/nikki/d' feeds.conf.default
-            fi
-          fi
-          
-          # 更新 feeds (忽略可能的 find 错误)
-          set +e  # 暂时禁用错误退出
-          ./scripts/feeds update -a -j $(nproc)
-          UPDATE_RESULT=$?
-          set -e  # 重新启用错误退出
-          
-          if [ $UPDATE_RESULT -ne 0 ]; then
-            echo "⚠️ feeds update 返回非零状态码，检查并清理..."
-            # 清理可能错误创建的索引文件
-            if [ "${{ steps.set-env.outputs.enable_nikki }}" != "true" ]; then
-              rm -rf feeds/nikki* feeds/nikki.index package/feeds/nikki 2>/dev/null || true
-            fi
-          fi
-          
-          # 强制清理不应存在的 feed 相关文件
-          if [ "${{ steps.set-env.outputs.enable_nikki }}" != "true" ]; then
-            rm -rf feeds/nikki* package/feeds/nikki 2>/dev/null || true
-          fi
-          
-          # 安装 feeds
-          set +e
-          ./scripts/feeds install -a -f -j $(nproc)
-          INSTALL_RESULT=$?
-          set -e
-          
-          if [ $INSTALL_RESULT -ne 0 ]; then
-            echo "⚠️ feeds install 有问题，清理并重试..."
-            rm -rf tmp/.packageinfo tmp/.targetinfo 2>/dev/null || true
-            if [ "${{ steps.set-env.outputs.enable_nikki }}" != "true" ]; then
-              rm -rf feeds/nikki* package/feeds/nikki 2>/dev/null || true
-            fi
-            ./scripts/feeds install -a -f -j $(nproc) || echo "⚠️ feeds install 仍有警告，继续执行..."
-          fi
+          ./scripts/feeds update -a -j $(nproc) || true
+          ./scripts/feeds install -a -f -j $(nproc) || true
           
           echo "✅ feeds 处理完成"
 
@@ -379,32 +329,15 @@ jobs:
           
           rm -rf package/feeds/packages/{exim,onionshare-cli,python-zope-event,python-zope-interface,python-gevent,python-twisted} 2>/dev/null || true
 
-          # QModem 相关修复 (仅当 qmodem feed 存在时)
+          # QModem 相关修复
           if [ -d "package/feeds/qmodem" ]; then
             rm -rf package/feeds/qmodem/ndisc6 2>/dev/null || true
-
-            # 修复 qmodem Makefile 中的 kmod-mhi-wwan 依赖问题
-            QMODEM_MK="package/feeds/qmodem/qmodem/Makefile"
-            if [ -f "$QMODEM_MK" ]; then
-              echo "🔧 修复 qmodem Makefile 依赖..."
-              # 完全移除 kmod-mhi-wwan 依赖
-              sed -i 's/+kmod-mhi-wwan//g' "$QMODEM_MK"
-              sed -i 's/kmod-mhi-wwan//g' "$QMODEM_MK"
-              echo "✅ qmodem 依赖修复完成"
-            fi
-            
-            # 同时修复 feeds/qmodem 中的原始文件
-            QMODEM_FEEDS_MK="feeds/qmodem/application/qmodem/Makefile"
-            if [ -f "$QMODEM_FEEDS_MK" ]; then
-              sed -i 's/+kmod-mhi-wwan//g' "$QMODEM_FEEDS_MK"
-              sed -i 's/kmod-mhi-wwan//g' "$QMODEM_FEEDS_MK"
-            fi
+            # 移除 kmod-mhi-wwan 依赖
+            find . -path "*qmodem*Makefile" -exec sed -i 's/+\?kmod-mhi-wwan//g' {} \; 2>/dev/null || true
           fi
 
-          MT_HWIFI_MK="package/mtk/drivers/mt_hwifi/Makefile"
-          if [ -f "$MT_HWIFI_MK" ]; then
-            sed -i 's/+kmod-mt_wifi_osal//g' "$MT_HWIFI_MK" || true
-          fi
+          # 修复 mt_hwifi
+          [ -f "package/mtk/drivers/mt_hwifi/Makefile" ] && sed -i 's/+kmod-mt_wifi_osal//g' "package/mtk/drivers/mt_hwifi/Makefile" || true
 
 
       - name: 配置构建
@@ -474,13 +407,18 @@ jobs:
                 echo "CONFIG_PACKAGE_kmod-nft-socket=y" >> .config
                 echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
                 echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
+              elif [ "$pkg" = "adguardhome" ]; then
+                echo "CONFIG_PACKAGE_luci-app-$pkg=y" >> .config
+                echo "CONFIG_PACKAGE_luci-i18n-$pkg-zh-cn=y" >> .config
               else
                 echo "CONFIG_PACKAGE_luci-app-$pkg=y" >> .config
               fi
             else
-              # nikki 禁用时添加所有相关包
+              # 特殊包禁用时添加所有相关包
               if [ "$pkg" = "nikki" ]; then
                 disabled_pkgs+=("nikki" "luci-app-nikki" "luci-i18n-nikki-zh-cn" "luci-i18n-nikki-en")
+              elif [ "$pkg" = "adguardhome" ]; then
+                disabled_pkgs+=("luci-app-$pkg" "luci-i18n-$pkg-zh-cn")
               else
                 disabled_pkgs+=("luci-app-$pkg")
               fi
@@ -534,70 +472,33 @@ jobs:
             disabled_pkgs+=("luci-app-qmodem-next" "luci-app-qmodem")
           fi
 
-          # 自动解析依赖（关键：make defconfig 会启用所有必需依赖）
-          make defconfig
-
           # 统一禁用不需要的包
           all_disabled=("luci-app-wrtbwmon" "luci-app-rclone" "rclone" "rclone-ng" "rclone-webui-react" "${disabled_pkgs[@]}")
           for pkg in "${all_disabled[@]}"; do
             sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-            sed -i "/^CONFIG_PACKAGE_${pkg}=m/d" .config
             echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
           done
 
-          # 额外确保 modem 相关包被禁用（如果未启用原版 modem）
-          if [ "${{ steps.set-env.outputs.enable_original_modem }}" != "true" ]; then
-            for pkg in luci-app-modem modem luci-i18n-modem-zh-cn luci-i18n-modem-en; do
-              sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
-              sed -i "/^CONFIG_PACKAGE_${pkg}=m/d" .config
-              echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-            done
-          fi
-
-          # 再次运行 defconfig 确保配置一致性
+          # 自动解析依赖
           make defconfig
 
           echo "✅ 配置完成"
 
-      - name: 预下载构建依赖
+      - name: 预下载和预构建
         run: |
           cd $SOURCE_DIR
+          THREADS=$(nproc)
+          
+          # 下载依赖（带重试）
           echo "📥 预下载构建依赖..."
-          THREADS=$(nproc)
-          
-          # 清理可能损坏的下载文件
           find dl -size -1024c -delete 2>/dev/null || true
-          
-          # 多次尝试下载，处理网络不稳定问题
-          MAX_RETRIES=3
-          for i in $(seq 1 $MAX_RETRIES); do
-            echo "📥 下载尝试 $i/$MAX_RETRIES..."
-            if make download -j$THREADS V=s 2>&1 | tee download.log; then
-              echo "✅ 下载成功"
-              break
-            else
-              echo "⚠️ 下载失败，清理并重试..."
-              # 删除可能损坏的小文件
-              find dl -size -1024c -delete 2>/dev/null || true
-              # 检查具体失败的包
-              grep -i "failed\|error" download.log | head -20 || true
-              if [ $i -eq $MAX_RETRIES ]; then
-                echo "❌ 多次下载尝试失败，继续构建时重试"
-              fi
-              sleep 5
-            fi
+          for i in 1 2 3; do
+            make download -j$THREADS && break || { find dl -size -1024c -delete 2>/dev/null || true; sleep 3; }
           done
-
-      - name: 预构建工具链
-        run: |
-          cd $SOURCE_DIR
+          
+          # 预构建工具链
           echo "🔧 预构建工具链..."
-          THREADS=$(nproc)
-          if [ ! -d "staging_dir" ] || [ -z "$(ls -A staging_dir 2>/dev/null)" ]; then
-            make toolchain/install -j$THREADS || echo "⚠️ 工具链构建失败，将在构建时重试"
-          else
-            echo "✅ 工具链已缓存，跳过预构建"
-          fi
+          [ -d "staging_dir" ] && [ -n "$(ls -A staging_dir 2>/dev/null)" ] && echo "✅ 工具链已缓存" || make toolchain/install -j$THREADS || true
 
       - name: 打包源码
         run: |
@@ -677,23 +578,11 @@ jobs:
           
           START_TIME=$(date +%s)
           
-          # 优化：下载依赖，带重试逻辑
-          echo "📥 检查并下载依赖..."
+          # 补充下载（如有遗漏）
           find dl -size -1024c -delete 2>/dev/null || true
+          make download -j$THREADS || true
           
-          MAX_RETRIES=3
-          for i in $(seq 1 $MAX_RETRIES); do
-            if make download -j$THREADS; then
-              echo "✅ 依赖下载完成"
-              break
-            else
-              echo "⚠️ 下载失败 ($i/$MAX_RETRIES)，清理并重试..."
-              find dl -size -1024c -delete 2>/dev/null || true
-              sleep 5
-            fi
-          done
-          
-          # 编译（使用 V=s 仅在失败时显示详细日志，提高效率）
+          # 编译
           if make -j$THREADS IGNORE_ERRORS=n; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
