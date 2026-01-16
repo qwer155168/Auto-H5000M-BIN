@@ -244,19 +244,20 @@ jobs:
           CONFIG_PACKAGE_kmod-qmi_wwan_s=y
           
           # QModem MWAN (多WAN负载均衡)
-          CONFIG_PACKAGE_luci-app-qmodem-mwan=y
-          CONFIG_PACKAGE_mwan3=y
-          CONFIG_PACKAGE_luci-app-mwan3=y
+          # CONFIG_PACKAGE_luci-app-qmodem-mwan is not set
+          # CONFIG_PACKAGE_mwan3 is not set
+          # CONFIG_PACKAGE_luci-app-mwan3 is not set
           # HQOS 支持
           CONFIG_PACKAGE_mtkhqos_util=y
           # ======== 常用软件 ========
           CONFIG_PACKAGE_luci-app-upnp=y
-          CONFIG_PACKAGE_luci-app-vlmcsd=y
-          CONFIG_PACKAGE_vlmcsd=y
-          CONFIG_PACKAGE_luci-app-adguardhome=y
-          CONFIG_PACKAGE_adguardhome=y
+          CONFIG_PACKAGE_luci-app-openclash=y
+          # CONFIG_PACKAGE_luci-app-vlmcsd is not set
+          # CONFIG_PACKAGE_vlmcsd is not set
+          # CONFIG_PACKAGE_luci-app-adguardhome is not set
+          # CONFIG_PACKAGE_adguardhome is not set
           CONFIG_PACKAGE_luci-app-ramfree=y
-          CONFIG_PACKAGE_luci-app-homeproxy=y
+          # CONFIG_PACKAGE_luci-app-homeproxy is not set
           CONFIG_PACKAGE_ca-bundle=y
           CONFIG_PACKAGE_curl=y
           CONFIG_PACKAGE_yq=y
